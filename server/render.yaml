@@ -4,25 +4,34 @@ services:
     name: nxtbuild-gateway
     env: docker
     dockerfilePath: ./gateway/Dockerfile
-    plan: starter
+    plan: free
     envVars:
       - key: PORT
         value: 5050
       - key: CLIENT_URL
-        value: https://nxtbuild.vercel.app # Update with your frontend production URL
+        value: https://nxtbuild.vercel.app
       - key: AUTH_SERVICE_URL
-        value: http://nxtbuild-auth-service:8001
+        fromService:
+          type: web
+          name: nxtbuild-auth-service
+          property: host
       - key: PROJECT_SERVICE_URL
-        value: http://nxtbuild-project-service:8002
+        fromService:
+          type: web
+          name: nxtbuild-project-service
+          property: host
       - key: AI_SERVICE_URL
-        value: http://nxtbuild-ai-service:8003
+        fromService:
+          type: web
+          name: nxtbuild-ai-service
+          property: host
 
-  # 2. Private Auth Service (Internal only)
-  - type: pserv
+  # 2. Auth Service (Free Web Service)
+  - type: web
     name: nxtbuild-auth-service
     env: docker
     dockerfilePath: ./services/auth/Dockerfile
-    plan: starter
+    plan: free
     envVars:
       - key: PORT
         value: 8001
@@ -33,26 +42,29 @@ services:
       - key: JWT_EXPIRES_IN
         value: 7d
 
-  # 3. Private Project Service (Internal only)
-  - type: pserv
+  # 3. Project Service (Free Web Service)
+  - type: web
     name: nxtbuild-project-service
     env: docker
     dockerfilePath: ./services/projects/Dockerfile
-    plan: starter
+    plan: free
     envVars:
       - key: PORT
         value: 8002
       - key: MONGODB_URI
         sync: false
       - key: AUTH_SERVICE_URL
-        value: http://nxtbuild-auth-service:8001
+        fromService:
+          type: web
+          name: nxtbuild-auth-service
+          property: host
 
-  # 4. Private AI Generation Service (Internal only)
-  - type: pserv
+  # 4. AI Generation Service (Free Web Service)
+  - type: web
     name: nxtbuild-ai-service
     env: docker
     dockerfilePath: ./services/ai/Dockerfile
-    plan: starter
+    plan: free
     envVars:
       - key: PORT
         value: 8003
@@ -61,6 +73,12 @@ services:
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: AUTH_SERVICE_URL
-        value: http://nxtbuild-auth-service:8001
+        fromService:
+          type: web
+          name: nxtbuild-auth-service
+          property: host
       - key: PROJECT_SERVICE_URL
-        value: http://nxtbuild-project-service:8002
+        fromService:
+          type: web
+          name: nxtbuild-project-service
+          property: host
