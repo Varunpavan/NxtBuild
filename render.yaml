@@ -1,0 +1,70 @@
+services:
+  # 1. Public API Gateway (Exposed to the web)
+  - type: web
+    name: nxtbuild-gateway
+    env: docker
+    dockerContext: server/gateway
+    dockerfilePath: server/gateway/Dockerfile
+    plan: starter
+    envVars:
+      - key: PORT
+        value: 5050
+      - key: CLIENT_URL
+        value: https://nxtbuild.vercel.app # Update with your frontend production URL
+      - key: AUTH_SERVICE_URL
+        value: http://nxtbuild-auth-service:8001
+      - key: PROJECT_SERVICE_URL
+        value: http://nxtbuild-project-service:8002
+      - key: AI_SERVICE_URL
+        value: http://nxtbuild-ai-service:8003
+
+  # 2. Private Auth Service (Internal only)
+  - type: pserv
+    name: nxtbuild-auth-service
+    env: docker
+    dockerContext: server/services/auth
+    dockerfilePath: server/services/auth/Dockerfile
+    plan: starter
+    envVars:
+      - key: PORT
+        value: 8001
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRES_IN
+        value: 7d
+
+  # 3. Private Project Service (Internal only)
+  - type: pserv
+    name: nxtbuild-project-service
+    env: docker
+    dockerContext: server/services/projects
+    dockerfilePath: server/services/projects/Dockerfile
+    plan: starter
+    envVars:
+      - key: PORT
+        value: 8002
+      - key: MONGODB_URI
+        sync: false
+      - key: AUTH_SERVICE_URL
+        value: http://nxtbuild-auth-service:8001
+
+  # 4. Private AI Generation Service (Internal only)
+  - type: pserv
+    name: nxtbuild-ai-service
+    env: docker
+    dockerContext: server/services/ai
+    dockerfilePath: server/services/ai/Dockerfile
+    plan: starter
+    envVars:
+      - key: PORT
+        value: 8003
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: AUTH_SERVICE_URL
+        value: http://nxtbuild-auth-service:8001
+      - key: PROJECT_SERVICE_URL
+        value: http://nxtbuild-project-service:8002
