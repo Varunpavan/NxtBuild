@@ -12,20 +12,11 @@ services:
       - key: CLIENT_URL
         value: https://nxt-build-sepia.vercel.app
       - key: AUTH_SERVICE_URL
-        fromService:
-          type: web
-          name: nxtbuild-auth-service
-          property: host
+        value: https://nxtbuild-auth-service.onrender.com
       - key: PROJECT_SERVICE_URL
-        fromService:
-          type: web
-          name: nxtbuild-project-service
-          property: host
+        value: https://nxtbuild-project-service.onrender.com
       - key: AI_SERVICE_URL
-        fromService:
-          type: web
-          name: nxtbuild-ai-service
-          property: host
+        value: https://nxtbuild-ai-service.onrender.com
 
   # 2. Auth Service (Free Web Service)
   - type: web
@@ -57,10 +48,7 @@ services:
       - key: MONGODB_URI
         sync: false
       - key: AUTH_SERVICE_URL
-        fromService:
-          type: web
-          name: nxtbuild-auth-service
-          property: host
+        value: https://nxtbuild-auth-service.onrender.com
 
   # 4. AI Generation Service (Free Web Service)
   - type: web
@@ -77,12 +65,6 @@ services:
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: AUTH_SERVICE_URL
-        fromService:
-          type: web
-          name: nxtbuild-auth-service
-          property: host
+        value: https://nxtbuild-auth-service.onrender.com
       - key: PROJECT_SERVICE_URL
-        fromService:
-          type: web
-          name: nxtbuild-project-service
-          property: host
+        value: https://nxtbuild-project-service.onrender.com
