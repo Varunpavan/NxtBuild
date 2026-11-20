@@ -5,76 +5,202 @@ a chat to keep changing the page, a code editor, and a one-click download.
 
 **Stack:** React 19 + Vite, React Router, Context API, axios | FastAPI (Python), Motor (MongoDB), PyJWT, Google GenAI (`google-genai`)
 
-## Run it
+---
 
-You need Python 3.10+, Node 18+, a MongoDB database (local or Atlas) and a Gemini API key from https://aistudio.google.com
+## 4-Service Microservices Architecture
 
-### 1. Server (FastAPI)
+NxtBuild is architected into 4 decoupled, independently scalable microservices:
+
+```
+                      +-----------------------------+
+                      |   React 19 Frontend (Vite)  |
+                      |    http://localhost:5173    |
+                      +--------------+--------------+
+                                     |
+                                     v
+                      +-----------------------------+
+                      |     API Gateway (5050)      |
+                      |  Routing, CORS, Aggregation |
+                      +----+---------+---------+----+
+                           |         |         |
+         +-----------------+         |         +-----------------+
+         |                           |                           |
+         v                           v                           v
++------------------+       +------------------+       +------------------+
+|   Auth Service   |       |  Project Service |       |    AI Service    |
+|   (Port 8001)    |       |   (Port 8002)    |       |   (Port 8003)    |
+| Users, JWT, Hash |       | CRUD, Code, Chat |       | Gemini 2.5 Flash |
++--------+---------+       +--------+---------+       +--------+---------+
+         |                          |                          |
+         |                          +------------<-------------+ (Code sync)
+         |                          |
+         v                          v
++---------------------------------------------+
+|            MongoDB Atlas Database           |
++---------------------------------------------+
+```
+
+### The 4 Microservices
+
+1. **API Gateway (`server/gateway`, Port `5050`):**
+   - Single public entry point for all frontend requests (`/api/auth/*`, `/api/projects/*`, `/api/health`).
+   - Reverse-proxies traffic asynchronously to the corresponding internal services.
+   - Handles CORS and aggregates cluster health check (`/api/health`).
+
+2. **Auth Service (`server/services/auth`, Port `8001`):**
+   - User registration, password hashing (`bcrypt`), and JWT generation/verification (`pyjwt`).
+   - Provides internal verification endpoint (`/auth/verify`) for zero-trust service-to-service validation.
+
+3. **Project Service (`server/services/projects`, Port `8002`):**
+   - Project CRUD operations, chat message history, and HTML code persistence.
+   - Provides internal secure endpoint (`PUT /internal/projects/:id/generated-code`) for the AI service.
+
+4. **AI Generation Service (`server/services/ai`, Port `8003`):**
+   - Prompt engineering and orchestrating Google Gemini 2.5 Flash (`v1beta` HTTP options).
+   - Enforces per-project concurrency locking (`asyncio.Lock`) to prevent race conditions during rapid prompts.
+   - Automatically commits generated HTML and assistant explanations back to Project Service.
+
+---
+
+## Running NxtBuild
+
+### Prerequisites
+- Python 3.10+
+- Node.js 18+
+- MongoDB URI (local or Atlas)
+- Google Gemini API key from https://aistudio.google.com
+
+### Option A: Local Development (Multi-Service Runner)
+
+1. **Setup Backend:**
+   ```bash
+   cd server
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   cp .env.example .env    # Fill in MONGODB_URI, JWT_SECRET, and GEMINI_API_KEY
+   ```
+
+2. **Start All 4 Microservices:**
+   ```bash
+   python run_services.py
+   ```
+   *This launches Auth (8001), Projects (8002), AI (8003), and the Gateway (5050) concurrently with graceful shutdown.*
+
+3. **Start Frontend:**
+   ```bash
+   cd client
+   npm install
+   npm run dev
+   ```
+   Open http://localhost:5173
+
+---
+
+### Option B: Docker Compose
+
+Run the entire backend cluster in isolated Docker containers:
+
 ```bash
 cd server
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env     # fill in MONGODB_URI, JWT_SECRET and GEMINI_API_KEY
+docker-compose up --build
+```
+
+- Gateway exposed on port `5050`
+- Services communicate over an internal Docker bridge network (`nxtbuild-net`)
+
+---
+
+### Option C: Monolithic Fallback
+
+If you prefer to run the single-process monolith:
+```bash
+cd server
 uvicorn main:app --reload --port 5050
 ```
-The server runs on http://localhost:5050 (interactive docs at http://localhost:5050/docs and health check at http://localhost:5050/api/health).
 
-### 2. Client
-```bash
-cd client
-npm install
-cp .env.example .env     # only needed if your server is not on port 5050
-npm run dev
-```
-Open http://localhost:5173
+---
 
-## How it works
+## Deployment on Render
 
-1. Sign up, then describe a page on the landing page or inside a new project.
-2. The client calls `POST /api/projects/:id/generate`. The server sends your prompt (and the current page code) to Gemini.
-3. Gemini returns one HTML file. The server saves it with the chat messages and sends it back.
-4. The client shows it inside a sandboxed `<iframe>`.
+NxtBuild includes a ready-to-use Render Blueprint (`server/render.yaml`):
 
-## API
+1. Push your repository to GitHub.
+2. In [Render Dashboard](https://dashboard.render.com), click **New +** $\rightarrow$ **Blueprint**.
+3. Select this repository. Render reads `server/render.yaml` and provisions:
+   - **`nxtbuild-gateway`** (Public Web Service)
+   - **`nxtbuild-auth-service`** (Private Service)
+   - **`nxtbuild-project-service`** (Private Service)
+   - **`nxtbuild-ai-service`** (Private Service)
+4. Enter your environment variables (`MONGODB_URI`, `JWT_SECRET`, `GEMINI_API_KEY`) when prompted.
+5. Deploy the frontend on **Vercel** or **Render Static Site**, pointing `VITE_API_URL` to your Render Gateway URL.
 
-| Method | Route | What it does |
-| --- | --- | --- |
-| POST | `/api/auth/signup` | create an account |
-| POST | `/api/auth/login` | log in, returns a token |
-| GET | `/api/auth/me` | who is logged in |
-| GET | `/api/projects` | list your projects |
-| POST | `/api/projects` | create a project |
-| GET | `/api/projects/:id` | one project with its chat |
-| PUT | `/api/projects/:id` | rename or save edited code |
-| DELETE | `/api/projects/:id` | delete a project |
-| POST | `/api/projects/:id/generate` | build or change the page with Gemini |
+---
 
-All `/api/projects` routes need the header `Authorization: Bearer <token>`.
+## API Endpoints
 
-## Folder map
+All external client requests hit the **API Gateway** on port `5050`:
+
+| Method | Route | Service Routed To | Description |
+| --- | --- | --- | --- |
+| GET | `/api/health` | Gateway (Aggregated) | Health status of all 4 services |
+| POST | `/api/auth/signup` | Auth Service (8001) | Create new user account |
+| POST | `/api/auth/login` | Auth Service (8001) | Authenticate user, return JWT |
+| GET | `/api/auth/me` | Auth Service (8001) | Fetch authenticated user profile |
+| GET | `/api/projects` | Project Service (8002) | List all projects for authenticated user |
+| POST | `/api/projects` | Project Service (8002) | Create a new project |
+| GET | `/api/projects/:id` | Project Service (8002) | Fetch project details, code & chat history |
+| PUT | `/api/projects/:id` | Project Service (8002) | Update project title or manual code edits |
+| DELETE | `/api/projects/:id` | Project Service (8002) | Delete a project |
+| POST | `/api/projects/:id/generate` | AI Service (8003) | Generate/update page using Gemini AI |
+
+---
+
+## Folder Map
 
 ```
 server/
-  main.py              FastAPI app initialization, CORS, lifespan & error handlers
-  requirements.txt     Python dependencies
-  app/
-    core/              config, security (bcrypt & JWT), database (motor), concurrency
-    schemas/           Pydantic schemas for auth and projects
-    api/               routes (health, auth, projects) and auth dependency
-    services/          gemini_service.py (Gemini GenAI async client & parser)
-    middleware/        observability (request logging and timing)
-  tests/               pytest test suite
-client/src
-  pages/               Landing, Login, Dashboard, Builder
-  components/          Navbar, Logo, ProjectCard, ChatPanel, PreviewPanel, HeroDemo
-  context/             AuthContext (user + login/signup/logout)
-  api/                 the axios instance
-  styles/              one CSS file per page
+  gateway/               # API Gateway (Reverse proxy, CORS, Health aggregation)
+    main.py
+    config.py
+    Dockerfile
+  services/
+    auth/                # Auth Service (JWT, Bcrypt, Verification)
+      main.py
+      security.py
+      database.py
+      config.py
+      Dockerfile
+    projects/            # Project Service (CRUD, MongoDB, History)
+      main.py
+      database.py
+      serializers.py
+      deps.py
+      config.py
+      Dockerfile
+    ai/                  # AI Service (Gemini 2.5 Flash, Concurrency lock)
+      main.py
+      gemini.py
+      concurrency.py
+      deps.py
+      config.py
+      Dockerfile
+  docker-compose.yml     # Multi-container orchestration
+  render.yaml            # Render Blueprint deployment
+  run_services.py        # Local multi-process runner
+  test_microservices_e2e.py  # End-to-end integration test suite
+client/src/
+  pages/                 # Landing, Login, Dashboard, Builder
+  components/            # Navbar, ProjectCard, ChatPanel, PreviewPanel, HeroDemo
+  context/               # AuthContext
+  api/                   # Axios client instance
+  styles/                # Modular CSS styling
 ```
 
-## Good to know
+---
 
-- Generated pages run with `sandbox` and **without** `allow-same-origin`, so AI code can never read your cookies or call your API. The side effect is that generated pages cannot use `localStorage`; the Gemini brief tells it not to.
-- Change the model with `GEMINI_MODEL` in `server/.env` (default `gemini-2.5-flash`).
-- Every generate call costs API credits. Prompts are capped at 2000 characters; a rate limiter (for example `express-rate-limit`) is a good next step before you deploy.
+## Security & Sandboxing
+
+- Generated pages run inside a sandboxed `<iframe>` (`sandbox="allow-scripts allow-modals allow-forms"` and **without** `allow-same-origin`), ensuring AI-generated scripts can never access host cookies, session storage, or the backend API.
+- All internal microservices validate requests via zero-trust internal endpoints or private networking.
+- Prompts are validated with a 2,000-character cap and per-project concurrency locks prevent overlapping generation calls.

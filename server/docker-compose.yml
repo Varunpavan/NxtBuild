@@ -1,0 +1,80 @@
+version: "3.8"
+
+services:
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: nxtbuild-gateway
+    ports:
+      - "5050:5050"
+    environment:
+      - PORT=5050
+      - CLIENT_URL=${CLIENT_URL:-http://localhost:5173}
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - PROJECT_SERVICE_URL=http://project-service:8002
+      - AI_SERVICE_URL=http://ai-service:8003
+    depends_on:
+      - auth-service
+      - project-service
+      - ai-service
+    networks:
+      - nxtbuild-net
+    restart: unless-stopped
+
+  auth-service:
+    build:
+      context: ./services/auth
+      dockerfile: Dockerfile
+    container_name: nxtbuild-auth-service
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - MONGODB_URI=${MONGODB_URI}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES_IN=${JWT_EXPIRES_IN:-7d}
+    networks:
+      - nxtbuild-net
+    restart: unless-stopped
+
+  project-service:
+    build:
+      context: ./services/projects
+      dockerfile: Dockerfile
+    container_name: nxtbuild-project-service
+    ports:
+      - "8002:8002"
+    environment:
+      - PORT=8002
+      - MONGODB_URI=${MONGODB_URI}
+      - AUTH_SERVICE_URL=http://auth-service:8001
+    depends_on:
+      - auth-service
+    networks:
+      - nxtbuild-net
+    restart: unless-stopped
+
+  ai-service:
+    build:
+      context: ./services/ai
+      dockerfile: Dockerfile
+    container_name: nxtbuild-ai-service
+    ports:
+      - "8003:8003"
+    environment:
+      - PORT=8003
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - AUTH_SERVICE_URL=http://auth-service:8001
+      - PROJECT_SERVICE_URL=http://project-service:8002
+    depends_on:
+      - auth-service
+      - project-service
+    networks:
+      - nxtbuild-net
+    restart: unless-stopped
+
+networks:
+  nxtbuild-net:
+    driver: bridge
