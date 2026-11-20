@@ -10,7 +10,7 @@ services:
       - key: PORT
         value: 5050
       - key: CLIENT_URL
-        value: https://nxtbuild.vercel.app # Update with your frontend production URL
+        value: https://nxt-build-sepia.vercel.app
       - key: AUTH_SERVICE_URL
         fromService:
           type: web
