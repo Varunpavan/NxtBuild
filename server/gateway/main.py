@@ -71,10 +71,20 @@ async def proxy_request(target_url: str, request: Request) -> Response:
             params=request.query_params,
             content=body
         )
+        # Filter out hop-by-hop and encoding headers from upstream response
+        response_headers = {}
+        excluded_resp_headers = {
+            "content-encoding", "content-length", "transfer-encoding",
+            "connection", "keep-alive", "server"
+        }
+        for k, v in upstream_resp.headers.items():
+            if k.lower() not in excluded_resp_headers:
+                response_headers[k] = v
+
         return Response(
             content=upstream_resp.content,
             status_code=upstream_resp.status_code,
-            headers=dict(upstream_resp.headers)
+            headers=response_headers
         )
     except httpx.RequestError as exc:
         logger.error(f"Upstream service connection failed ({target_url}): {exc}")

@@ -46,8 +46,10 @@ function Login() {
       }
     } catch (err) {
       console.log(err)
-      if (err.response && err.response.data.message) {
+      if (err.response && err.response.data && err.response.data.message) {
         setError(err.response.data.message)
+      } else if (err.response && err.response.status === 429) {
+        setError('Too many requests. Please wait a minute and try again.')
       } else {
         setError('Could not reach the server. Check that it is running and try again.')
       }
