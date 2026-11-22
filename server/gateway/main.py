@@ -57,8 +57,8 @@ async def proxy_request(target_url: str, request: Request) -> Response:
     """Forwards incoming client request to downstream microservice and returns its response."""
     client: httpx.AsyncClient = request.app.state.http_client
 
-    # Filter out hop-by-hop headers
-    excluded_headers = {"host", "content-length"}
+    # Filter out hop-by-hop and client encoding headers
+    excluded_headers = {"host", "content-length", "accept-encoding"}
     headers = {k: v for k, v in request.headers.items() if k.lower() not in excluded_headers}
 
     body = await request.body()
@@ -71,12 +71,15 @@ async def proxy_request(target_url: str, request: Request) -> Response:
             params=request.query_params,
             content=body
         )
-        media_type = upstream_resp.headers.get("content-type", "application/json")
-        return Response(
-            content=upstream_resp.content,
-            status_code=upstream_resp.status_code,
-            media_type=media_type
-        )
+        try:
+            data = upstream_resp.json()
+            return JSONResponse(content=data, status_code=upstream_resp.status_code)
+        except Exception:
+            return Response(
+                content=upstream_resp.text,
+                status_code=upstream_resp.status_code,
+                media_type="text/plain; charset=utf-8"
+            )
     except httpx.RequestError as exc:
         logger.error(f"Upstream service connection failed ({target_url}): {exc}")
         return JSONResponse(
