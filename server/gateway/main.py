@@ -28,11 +28,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="NxtBuild API Gateway", version="1.0.0", lifespan=lifespan)
 
-# CORS configuration
+# CORS configuration - Allow local dev, LAN IPs, and any Vercel domain
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$",
+    allow_origin_regex=r"^https?://([a-zA-Z0-9_\-]+\.)*vercel\.app$|^https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
