@@ -10,6 +10,9 @@ function AuthProvider({ children }) {
 
   // check if a saved token exists on mount
   useEffect(() => {
+    // Silently pre-warm backend microservices on Render in background
+    api.get('/health').catch(() => {})
+
     async function loadUser() {
       let token = Cookies.get('nxtbuild_token')
 

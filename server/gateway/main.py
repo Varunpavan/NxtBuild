@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -54,68 +55,115 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 
 async def proxy_request(target_url: str, request: Request) -> Response:
-    """Forwards incoming client request to downstream microservice and returns its response."""
+    """Forwards incoming client request to downstream microservice with automatic retry for cold starts."""
     client: httpx.AsyncClient = request.app.state.http_client
 
     # Forward only clean client headers. Strips Cloudflare and Render edge headers
-    # (cf-*, rndr-*, x-forwarded-*) to prevent Cloudflare proxy loop detection (HTTP 429).
+    # (cf-*, rndr-*, x-forwarded-*) to prevent Cloudflare proxy loop detection.
     allowed_headers = {"authorization", "content-type", "accept", "user-agent"}
     headers = {k.lower(): v for k, v in request.headers.items() if k.lower() in allowed_headers}
 
     body = await request.body()
 
-    try:
-        upstream_resp = await client.request(
-            method=request.method,
-            url=target_url,
-            headers=headers,
-            params=request.query_params,
-            content=body
-        )
+    # Retry strategy for Render free-tier cold-starts:
+    # When downstream is asleep, Render edge returns 429 / 502 / 503 / 504 while container boots (~15-25s)
+    max_retries = 4
+    retry_delays = [2.0, 3.5, 5.0]
+    last_error = None
+
+    for attempt in range(max_retries):
         try:
-            data = upstream_resp.json()
-            return JSONResponse(content=data, status_code=upstream_resp.status_code)
-        except Exception:
-            return Response(
-                content=upstream_resp.text,
-                status_code=upstream_resp.status_code,
-                media_type="text/plain; charset=utf-8"
+            upstream_resp = await client.request(
+                method=request.method,
+                url=target_url,
+                headers=headers,
+                params=request.query_params,
+                content=body
             )
-    except httpx.RequestError as exc:
-        logger.error(f"Upstream service connection failed ({target_url}): {exc}")
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"success": False, "message": "Service temporarily unavailable. Please try again in a moment."}
-        )
+
+            # Check if Render edge returned a transient cold-boot code (e.g. 429 rate limit or 502/503 during boot)
+            if upstream_resp.status_code in {429, 502, 503, 504} and attempt < len(retry_delays):
+                delay = retry_delays[attempt]
+                logger.warning(
+                    f"Upstream {target_url} returned {upstream_resp.status_code} (cold-start / spin-up). "
+                    f"Retrying in {delay}s (attempt {attempt + 1}/{max_retries})..."
+                )
+                await asyncio.sleep(delay)
+                continue
+
+            # Attempt to parse upstream JSON response
+            try:
+                data = upstream_resp.json()
+                return JSONResponse(content=data, status_code=upstream_resp.status_code)
+            except Exception:
+                # If upstream returned a non-JSON 429 after all retries, never expose raw 429 to client.
+                # Transform it into a graceful 503 with friendly JSON message for the frontend.
+                if upstream_resp.status_code == 429:
+                    return JSONResponse(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        content={
+                            "success": False,
+                            "message": "Services are waking up from sleep mode. Please wait a moment and try again."
+                        }
+                    )
+                return Response(
+                    content=upstream_resp.text,
+                    status_code=upstream_resp.status_code,
+                    media_type="text/plain; charset=utf-8"
+                )
+
+        except (httpx.RequestError, httpx.TimeoutException) as exc:
+            last_error = exc
+            if attempt < len(retry_delays):
+                delay = retry_delays[attempt]
+                logger.warning(
+                    f"Upstream {target_url} connection error: {exc}. Retrying in {delay}s..."
+                )
+                await asyncio.sleep(delay)
+                continue
+            break
+
+    logger.error(f"Upstream service connection failed after {max_retries} attempts ({target_url}): {last_error}")
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "success": False,
+            "message": "Services are waking up from sleep mode. Please wait a few seconds and try again."
+        }
+    )
 
 
-# --- Global Health Check (Aggregated) ---
+# --- Global Health Check (Aggregated & Parallel Pre-Warming) ---
 @app.get("/api/health")
 async def health(request: Request):
     client: httpx.AsyncClient = request.app.state.http_client
 
-    async def check_service(url: str, name: str) -> str:
+    async def ping_service(url: str, name: str) -> tuple[str, str]:
         try:
-            resp = await client.get(f"{url.rstrip('/')}/health", timeout=3.0)
-            return "online" if resp.status_code == 200 else "degraded"
+            resp = await client.get(f"{url.rstrip('/')}/health", timeout=10.0)
+            return name, "online" if resp.status_code == 200 else "degraded"
         except Exception:
-            return "offline"
+            return name, "offline"
 
-    auth_status = await check_service(settings.AUTH_SERVICE_URL, "auth")
-    proj_status = await check_service(settings.PROJECT_SERVICE_URL, "projects")
-    ai_status = await check_service(settings.AI_SERVICE_URL, "ai")
+    # Ping all 3 downstream services concurrently in parallel to pre-warm containers
+    results = await asyncio.gather(
+        ping_service(settings.AUTH_SERVICE_URL, "auth_service"),
+        ping_service(settings.PROJECT_SERVICE_URL, "project_service"),
+        ping_service(settings.AI_SERVICE_URL, "ai_service"),
+        return_exceptions=True
+    )
 
-    all_online = all(s == "online" for s in [auth_status, proj_status, ai_status])
+    services_status = {"gateway": "online"}
+    for res in results:
+        if isinstance(res, tuple):
+            services_status[res[0]] = res[1]
+
+    all_online = all(status == "online" for status in services_status.values())
 
     return {
         "success": True,
         "message": "NxtBuild API Gateway is running",
-        "services": {
-            "gateway": "online",
-            "auth_service": auth_status,
-            "project_service": proj_status,
-            "ai_service": ai_status
-        },
+        "services": services_status,
         "all_healthy": all_online
     }
 
