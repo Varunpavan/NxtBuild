@@ -57,9 +57,10 @@ async def proxy_request(target_url: str, request: Request) -> Response:
     """Forwards incoming client request to downstream microservice and returns its response."""
     client: httpx.AsyncClient = request.app.state.http_client
 
-    # Filter out hop-by-hop and client encoding headers
-    excluded_headers = {"host", "content-length", "accept-encoding"}
-    headers = {k: v for k, v in request.headers.items() if k.lower() not in excluded_headers}
+    # Forward only clean client headers. Strips Cloudflare and Render edge headers
+    # (cf-*, rndr-*, x-forwarded-*) to prevent Cloudflare proxy loop detection (HTTP 429).
+    allowed_headers = {"authorization", "content-type", "accept", "user-agent"}
+    headers = {k.lower(): v for k, v in request.headers.items() if k.lower() in allowed_headers}
 
     body = await request.body()
 
