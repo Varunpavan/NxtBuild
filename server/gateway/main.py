@@ -65,45 +65,50 @@ async def proxy_request(target_url: str, request: Request) -> Response:
 
     body = await request.body()
 
-    # Retry strategy for Render free-tier cold-starts:
-    # When downstream is asleep, Render edge returns 429 / 502 / 503 / 504 while container boots (~15-25s)
-    max_retries = 4
-    retry_delays = [2.0, 3.5, 5.0]
+    # Render free-tier cold-start retry strategy.
+    # Render containers take 35–50s to boot from sleep. During that window Render's edge
+    # proxy emits transient 429 / 502 / 503 / 504 codes.  We hold the client connection
+    # open and retry with progressive backoff until the container is fully awake.
+    # Total maximum wait budget: 2+4+6+8+10+12 = 42 seconds — enough to outlast any cold start.
+    TRANSIENT_CODES = {429, 502, 503, 504}
+    retry_delays = [2.0, 4.0, 6.0, 8.0, 10.0, 12.0]
+    max_attempts = len(retry_delays) + 1   # 7 total attempts
     last_error = None
 
-    for attempt in range(max_retries):
+    for attempt in range(max_attempts):
         try:
             upstream_resp = await client.request(
                 method=request.method,
                 url=target_url,
                 headers=headers,
                 params=request.query_params,
-                content=body
+                content=body,
+                timeout=55.0   # per-attempt timeout; shared client timeout is 90s
             )
 
-            # Check if Render edge returned a transient cold-boot code (e.g. 429 rate limit or 502/503 during boot)
-            if upstream_resp.status_code in {429, 502, 503, 504} and attempt < len(retry_delays):
+            # Transient cold-boot code from Render's edge — wait and retry
+            if upstream_resp.status_code in TRANSIENT_CODES and attempt < len(retry_delays):
                 delay = retry_delays[attempt]
                 logger.warning(
-                    f"Upstream {target_url} returned {upstream_resp.status_code} (cold-start / spin-up). "
-                    f"Retrying in {delay}s (attempt {attempt + 1}/{max_retries})..."
+                    f"Upstream {target_url} returned {upstream_resp.status_code} (Render cold-start). "
+                    f"Waiting {delay}s then retrying (attempt {attempt + 1}/{max_attempts})..."
                 )
                 await asyncio.sleep(delay)
                 continue
 
-            # Attempt to parse upstream JSON response
+            # Container is awake — parse and return the real response
             try:
                 data = upstream_resp.json()
                 return JSONResponse(content=data, status_code=upstream_resp.status_code)
             except Exception:
-                # If upstream returned a non-JSON 429 after all retries, never expose raw 429 to client.
-                # Transform it into a graceful 503 with friendly JSON message for the frontend.
-                if upstream_resp.status_code == 429:
+                # Non-JSON body (Render HTML error page, etc.)
+                # Never forward a raw transient code to the client; mask it as 503 with JSON
+                if upstream_resp.status_code in TRANSIENT_CODES:
                     return JSONResponse(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                         content={
                             "success": False,
-                            "message": "Services are waking up from sleep mode. Please wait a moment and try again."
+                            "message": "Service is still waking up. Please try again in a few seconds."
                         }
                     )
                 return Response(
@@ -117,18 +122,21 @@ async def proxy_request(target_url: str, request: Request) -> Response:
             if attempt < len(retry_delays):
                 delay = retry_delays[attempt]
                 logger.warning(
-                    f"Upstream {target_url} connection error: {exc}. Retrying in {delay}s..."
+                    f"Upstream {target_url} connection error on attempt {attempt + 1}: {exc}. "
+                    f"Retrying in {delay}s..."
                 )
                 await asyncio.sleep(delay)
                 continue
             break
 
-    logger.error(f"Upstream service connection failed after {max_retries} attempts ({target_url}): {last_error}")
+    logger.error(
+        f"All {max_attempts} proxy attempts exhausted for {target_url}. Last error: {last_error}"
+    )
     return JSONResponse(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         content={
             "success": False,
-            "message": "Services are waking up from sleep mode. Please wait a few seconds and try again."
+            "message": "Service is temporarily unavailable. Please wait a moment and try again."
         }
     )
 
